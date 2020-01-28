@@ -7,21 +7,6 @@ import re
 import pandas as pd
 import numpy as np
 
-def convert_to_string(df, col):
-    """
-    convert_to_string turns a specific pandas dataframe column into a string type while
-    retaining NaNs in the dataset.
-
-    :param df: the dataframe of interest
-    :param col: the column you wish to turn to a string type
-    :return: df: the dataframe with the string datatype for that specific column
-    """
-    df[col] = df[col].fillna(-1)
-    df[col] = df[col].astype(int)
-    df[col] = df[col].astype(str)
-    df[col] = df[col].replace('-1', np.nan)
-    return df
-
 def queryMetaboAnalyst(filename):
     """
     queryMetaboAnalyst takes the file (currently only written for csv files),
