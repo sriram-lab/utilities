@@ -9,13 +9,16 @@ import numpy as np
 
 def queryMetaboAnalyst(filename):
     """
+    
     queryMetaboAnalyst takes the file (currently only written for csv files),
-    and uses the first column as metabolite names in the file. The metabolite names
-    are queried using MetaboAnalyst. The output is a metabolite map consisting of
+    and uses the first column as metabolite names in the file. 
+    
+    The metabolite names are queried using MetaboAnalyst. The output is a metabolite map consisting of
     several different identifiers for the given metabolite.
 
-    :param filename: the file containing the metabolomics data
-    :return: data: the metabolite map containing several identifiers
+    :param   filename: the file containing the metabolomics data
+    :return: data:     a metabolite map dataframe containing several different metabolite identifiers
+    
     """
     import requests
     import json
@@ -49,12 +52,15 @@ def queryMetaboAnalyst(filename):
 
 def mapMetabolicModel(model):
     """
+    
     mapMetabolicModel takes in a metabolic model (xml format only), and parses the
-    identifiers in the map. Currently only tested with RECON1 - xml namespaces will change
-    depending on metabolic models.
+    identifiers in the map. 
+    
+    Currently only tested with RECON1 - xml namespaces will change depending on metabolic models.
 
-    :param model: the path to the metabolic model file (xml file)
-    :return: modelMap: the map containing metabolite identifiers from the metabolic model
+    :param   model:    the path to the metabolic model file (xml file)
+    :return: modelMap: the dataframe map containing metabolite identifiers from the metabolic model
+    
     """
     import lxml
     from lxml import etree
@@ -122,13 +128,14 @@ def mapMetabolicModel(model):
 
 def matchModelAndData(data, modelMap):
     """
+    
     matchModelAndData uses the identifiers from the metabolomics data and the model
     to find matches between them.
 
-    :param data: The metabolite map queried from MetaboAnalyst
-    :param modelMap: The metabolite map queried from the metabolic model
-
-    :return: mergedModelDataMap: the merged map between the metabolomics data and the metabolic model
+    :param   data:               The metabolite map dataframe queried from MetaboAnalyst
+    :param   modelMap:           The metabolite map dataframe queried from the metabolic model
+    :return: mergedModelDataMap: The merged map between the metabolomics data and the metabolic model
+    
     """
     print('Match metabolomics identifiers and model identifiers by ChEBI and KEGG IDs')
 
@@ -151,11 +158,13 @@ def matchModelAndData(data, modelMap):
 
 def mapMetabolitePositionsInModel(mergedModelDataMap, model):
     """
-    mapMetabolitePositionsInModel gets the metabolite positions using cobrapy
+    
+    mapMetabolitePositionsInModel gets the metabolite positions using cobrapy.
 
-    :param mergedModelDataMap: the merged map between the metabolomics data and the metabolic model
-    :param model: the metabolic model (xml)
-    :return: Position model: an array of the positions for each metabolite in the metabolic model
+    :param mergedModelDataMap: The merged map between the metabolomics data and the metabolic model
+    :param model:              The path to the metabolic model (xml file)
+    :return: PositionModel:    An array of the positions for each metabolite in the metabolic model
+    
     """
     import cobra
     print("Mapping metabolite positions in metabolic model")
@@ -195,11 +204,14 @@ def mapMetabolitePositionsInModel(mergedModelDataMap, model):
 
 def constructFinalDataset(PositionModel, filename):
     """
-    constructFinalDataset merged the array of metabolite positions and the file name together.
+    
+    constructFinalDataset merges the array of metabolite positions and the file name together.
     It automatically outputs an Excel file, ready for piping into DFA.
+    
     :param PositionModel: The metabolite positions in the metabolic model
     :param filename: The path of the metabolomics data
     :return: df: the final dataframe to be used for DFA
+    
     """
     print("Merging metabolomics data to model map")
     fileData = pd.read_csv(filename)
