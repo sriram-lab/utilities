@@ -1,2 +1,4 @@
-# utilities
-A repo for useful miscellaneous functions related to data processing. 
+# Utilities
+This repository contains several miscellanous functions and documentation in MATLAB, Python, and R. 
+
+
