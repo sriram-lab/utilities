@@ -2,6 +2,10 @@
 metabolomics-parser.py uses the common metabolite names in a metabolomics dataset and maps them to standard
 metabolite identifiers in established databases. This is used for mapping metabolites to constraint-based metabolic
 models (sbml-based namespaces only).
+
+TODO:
+  * Figure out robust way to query large datasets
+
 @author: Scott Campit
 """
 import sys, os
@@ -9,7 +13,8 @@ import re
 import pandas as pd
 import numpy as np
 
-def queryPubChem(data, filename, sheet=''):
+
+def queryPubChem(data):
     """
     queryPubChem maps the metabolite name from a pandas Dataframe in the 'Compound Method' column and extracts
     synoynms from several databases using the PubChem API.
@@ -19,62 +24,56 @@ def queryPubChem(data, filename, sheet=''):
                            saved as a .csv file.
     :return queryList:     A string with semicolon delimters to be fed into a REST-API
     """
-
     import pubchempy as pcp
 
     # Split 'Compound Method' column by the '/' regex and clean up some data
     data = data.drop('Compound Method', axis=1).join(data['Compound Method']
-                                                 .str.split('/', expand=True)
-                                                 .stack().reset_index(level=1, drop=True)
-                                                 .rename('Metabolite'))
+                                                     .str.split('/', expand=True)
+                                                     .stack().reset_index(level=1, drop=True)
+                                                     .rename('Metabolite'))
     data['Metabolite'] = data['Metabolite'].str.lower()
     pubChemQuery = data['Metabolite'].tolist()
 
     # Mine the PubChem database for synonyms
     all_compounds = []
     print("Mapping metabolite names to PubChem database for synonym matching and ID retrieval.")
+
+    # The data is too large to keep in memory. So I wrote it into a csv file, and will read in.
     for metabolite in pubChemQuery:
         try:
             df = pcp.get_substances(identifier=metabolite,
                                     namespace='name',
                                     as_dataframe=True)
             df['Name'] = metabolite
-            print(df)
-            all_compounds.append(df)
+            df = df.applymap(str)
+            df = df.drop('synonyms', axis=1).join(df['synonyms']
+                                            .str.split(',', expand=True)
+                                            .stack().reset_index(level=1, drop=True)
+                                            .rename('synonyms'))
+            df.to_csv('~/Data/Mappings/ME1/pubmed_me1_query.csv',
+                      mode='a',
+                      header=False, index=False)
+
         except (KeyError, TimeoutError, pcp.TimeoutError):
             continue
-    all_compounds = pd.concat(all_compounds)
-    all_compounds.to_csv(filename + '_' + sheet +'_pubchem.csv')
 
-    # Read in assembled database as pandas dataframe. It transforms the nested list in the Pandas Dataframe to a
-    # string that can be manipulated using regexs
-    all_compounds = pd.read_csv(filename + '_' + sheet +'_pubchem.csv')
+    print("Finished metabolite common name -> identifier synoynm matching!")
 
-    # Explode synonyms column
-    all_compounds = all_compounds.drop('synonyms', axis=1).join(all_compounds['synonyms']
-                                                              .str.split(',', expand=True)
-                                                              .stack().reset_index(level=1, drop=True)
-                                                              .rename('synonyms'))
 
-    # Clean up regexes and get unique compounds
-    patterns = ["[", "]", "'"]
-    for p in patterns:
-        all_compounds['synonyms'] = all_compounds['synonyms'].str.replace(p, '')
-    all_compounds['synonyms'] = all_compounds['synonyms'].str.lower()
-
-    # Make this JSON serializable
-    queryList = ';'.join(all_compounds['synonyms'].unique())
-    return all_compounds, queryList
-
-def queryMetaboAnalyst(filename, sheet='Sheet1'):
+def queryMetaboAnalyst(filename='', sheet='Sheet1', synmatch=True):
     """
     queryMetaboAnalyst takes the file (currently only written for csv files),
-    and uses the first column as metabolite names in the file. 
-    
+    and uses the first column as metabolite names in the file.
+
     The metabolite names are queried using MetaboAnalyst. The output is a metabolite map consisting of
     several different identifiers for the given metabolite.
 
+    INPUTS:
     :param   filename: A string denoting the path to a text delimited or Excel file containing the metabolomics data
+    :param   sheet:    A string denoting the tab name to read in
+    :param   synmatch: A boolean flag determining whether to perform synonym matching or not
+
+    OUTPUT:
     :return: data:     A Pandas dataframe with a metabolite map containing several different metabolite identifiers
     """
 
@@ -87,41 +86,95 @@ def queryMetaboAnalyst(filename, sheet='Sheet1'):
     else:
         fileData = pd.read_csv(filename)
 
-    # Get synonyms of each metabolite from PubChem
-    all_compounds, queryList = queryPubChem(fileData, filename, sheet)
+    # Load from Google Drive
+    # wb = gc.open_by_url(filename)
+    # wks = wb.worksheet(sheet)
+    # data = wks.get_all_values()
+    # fileData = pd.DataFrame(data)
+    # header = fileData.iloc[0]
+    # fileData = fileData[1:]
+    # fileData.columns = header
 
-    # Query metaboAnalyst for additional database identifiers
-    queryDict = {"queryList" : queryList,
-             "inputType" : "name"}
-    metabolites = json.dumps(queryDict)
+    patterns = ["[", "]", "'", '"', '.']
+    if synmatch is True:
+        # Get synonyms of each metabolite from PubChem
+        #queryPubChem(fileData)
+        all_compounds = pd.read_csv(r'~/Data/Mappings/ME1/pubmed_me1_query.csv', chunksize=1E3)
+        for chunk in all_compounds:
+            chunk['Name'] = chunk['Name'].astype(str)
 
-    # Query MetaboAnalyst using data set metabolites
-    url = "http://api.xialab.ca/mapcompounds"
-    headers = {
-        'Content-Type': "application/json",
-        'cache-control': "no-cache",
-    }
-    response = requests.request("POST", url, data=metabolites, headers=headers).json()
-    data = pd.DataFrame(response)
+            # Clean up regexes and get unique compounds
+            for p in patterns:
+                chunk['Name'] = chunk['Name'].str.replace(p, '')
+                chunk['Name'] = chunk['Name'].str.strip()
+            chunk['Name'] = chunk['Name'].str.lower()
+            chunk['Compound Method'] = chunk['Name']
 
-    identifiers = ['hmdb_id', 'kegg_id', 'pubchem_id', 'chebi_id', 'chebi_id', 'metlin_id']
-    for id in identifiers:
-        data[id] = data[id].replace('-', np.nan)
-    data['chebi_id'] = data['chebi_id'].astype(float)
+            queryList = ';'.join(chunk['Compound Method'].unique())
 
-    print('MetaboAnalyst query done!')
-    print(data)
+            # Query metaboAnalyst for additional database identifiers
+            queryDict = {"queryList": queryList,
+                         "inputType": "name"}
+            metabolites = json.dumps(queryDict)
+
+            # Query MetaboAnalyst using data set metabolites
+            url = "http://api.xialab.ca/mapcompounds"
+            headers = {
+                'Content-Type': "application/json",
+                'cache-control': "no-cache",
+            }
+            response = requests.request("POST", url, data=metabolites, headers=headers).json()
+            data = pd.DataFrame(response)
+
+            identifiers = ['hmdb_id', 'kegg_id', 'pubchem_id', 'chebi_id', 'chebi_id', 'metlin_id']
+            for id in identifiers:
+                data[id] = data[id].replace('-', np.nan)
+                data[id] = data[id].astype(str)
+
+            data.to_csv('~/Data/Mappings/ME1/metaboanalyst_me1_query.csv', mode='a', header=False)
+            print('MetaboAnalyst query done!')
+        data = list()
+
+    else:
+        all_compounds = fileData
+        for p in patterns:
+            all_compounds['Compound Method'] = all_compounds['Compound Method'].str.replace(p, '')
+            all_compounds['Compound Method'] = all_compounds['Compound Method'].str.strip()
+        all_compounds['Compound Method'] = all_compounds['Compound Method'].str.lower()
+
+        queryList = ';'.join(all_compounds['Compound Method'].unique())
+
+        # Query metaboAnalyst for additional database identifiers
+        queryDict = {"queryList": queryList,
+                     "inputType": "name"}
+        metabolites = json.dumps(queryDict)
+
+        # Query MetaboAnalyst using data set metabolites
+        url = "http://api.xialab.ca/mapcompounds"
+        headers = {
+            'Content-Type': "application/json",
+            'cache-control': "no-cache",
+        }
+        response = requests.request("POST", url, data=metabolites, headers=headers).json()
+        data = pd.DataFrame(response)
+
+        identifiers = ['hmdb_id', 'kegg_id', 'pubchem_id', 'chebi_id', 'chebi_id', 'metlin_id']
+        for id in identifiers:
+            data[id] = data[id].replace('-', np.nan)
+            data[id] = data[id].astype(str)
+        print('MetaboAnalyst query done!')
 
     return data
+
 
 def mapMetabolicModel(model):
     """
     mapMetabolicModel takes in a metabolic model (xml format only), and parses the
     identifiers in the map. 
-    
+
     Currently only tested with RECON1 - xml namespaces will change depending on metabolic models.
 
-    :param  model:    A string describing the path to the metabolic model file (.xml or .sbml file)
+    :param  model:    A string describing the path to the metabolic model file (`.xml` or `.sbml` file types supported only.
     :return modelMap: A Pandas dataframe containing metabolite identifiers from the metabolic model
     """
 
@@ -148,6 +201,7 @@ def mapMetabolicModel(model):
                 hmdb = []
                 kegg = []
 
+                # Get metabolite identifiers for CHEBI, HMDB and KEGG
                 metabolite_name.append(name)
                 metabolite_name = str(metabolite_name).replace(
                     '[', '').replace(']', '')
@@ -176,19 +230,22 @@ def mapMetabolicModel(model):
                 kegg = str(kegg).replace('[', '').replace(']', '')
 
                 # Format stuff correctly before saving
-                modelMap = modelMap.append({'Metabolite':metabolite_name,
-                                            'BIGG':bigg, 'HMDB':hmdb,
-                                            'CHEBI':chebi, 'KEGG':kegg},
-                                            ignore_index=True)
+                modelMap = modelMap.append({'Metabolite': metabolite_name,
+                                            'BIGG': bigg, 'HMDB': hmdb,
+                                            'CHEBI': chebi, 'KEGG': kegg},
+                                           ignore_index=True)
         element.clear()
 
-    modelMap['CHEBI'] = modelMap['CHEBI'].str.replace("'", "")
-    modelMap['CHEBI'] = modelMap['CHEBI'].astype(float)
+    for col in modelMap:
+        modelMap[col] = modelMap[col].astype(str)
+        modelMap[col] = modelMap[col].str.replace("'", "")
+    #modelMap = modelMap.drop_duplicates(keep='first')
+    modelMap.to_csv('~/Data/Mappings/ME1/RECON1_ID_Map.csv', index=False)
     print("Metabolic map complete")
-    print(modelMap)
     return modelMap
 
-def matchModelAndData(data, modelMap):
+
+def matchModelAndData(data, modelMap, synmatch=True):
     """
     matchModelAndData uses the identifiers from the metabolomics data and the model
     to find matches between them.
@@ -201,21 +258,31 @@ def matchModelAndData(data, modelMap):
     """
 
     print('Match metabolomics identifiers and model identifiers by ChEBI and KEGG IDs')
-    chebi = pd.merge(modelMap, data, left_on='CHEBI', right_on='chebi_id')
-    chebi = chebi[np.isfinite(chebi['CHEBI'])]
-    chebi = chebi[["Metabolite", "query", "BIGG", "CHEBI"]]
 
-    kegg = pd.merge(modelMap, data, left_on='KEGG', right_on='kegg_id')
-    kegg = kegg[pd.notnull(kegg['KEGG'])]
-    kegg = kegg[['Metabolite', 'query', 'BIGG', 'KEGG']]
+    if synmatch is True:
+        data = pd.read_csv(r'/home/scampit/Data/Mappings/ME1/metaboanalyst_me1_query.csv', dtype=str, chunksize=1E1)
+        for chunk in data:
+            chebi = pd.merge(modelMap, chunk, left_on='CHEBI', right_on='chebi_id', how='inner')
+            chebi = chebi[["Metabolite", "query", "BIGG", "CHEBI"]]
+            chebi = chebi.dropna()
 
-    mergedModelDataMap = pd.merge(chebi, kegg,
-                                  how='outer', on=['Metabolite', 'query', 'BIGG'])
-    mergedModelDataMap = mergedModelDataMap.drop_duplicates(keep='first')
+            kegg = pd.merge(modelMap, chunk, left_on='KEGG', right_on='kegg_id', how='inner')
+            kegg = kegg[['Metabolite', 'query', 'BIGG', 'KEGG']]
+            kegg = kegg.dropna()
+            merged_data = pd.merge(chebi, kegg,
+                                          how='inner', on=['Metabolite', 'query', 'BIGG'])
+            merged_data.to_csv(r'~/Data/Mappings/ME1/metaboanalyst_recon1_map.csv', mode='a', header=False, index=False)
+    else:
+        chebi = pd.merge(modelMap, data, left_on='CHEBI', right_on='chebi_id')
+        chebi = chebi[["Metabolite", "query", "BIGG", "CHEBI"]]
 
+        kegg = pd.merge(modelMap, data, left_on='KEGG', right_on='kegg_id')
+        kegg = kegg[['Metabolite', 'query', 'BIGG', 'KEGG']]
+        merged_data = pd.merge(chebi, kegg,
+                                      how='inner', on=['Metabolite', 'query', 'BIGG'])
+        merged_data = merged_data.drop_duplicates('query', keep='first')
     print("Found matching metabolites based on ChEBI and KEGG identities!")
-    print(mergedModelDataMap)
-    return mergedModelDataMap
+    return merged_data
 
 def mapMetabolitePositionsInModel(mergedModelDataMap, model):
     """
@@ -223,7 +290,7 @@ def mapMetabolitePositionsInModel(mergedModelDataMap, model):
 
     :param  mergedModelDataMap: A Pandas dataframe of the merged map between the metabolomics data and the metabolic
                                 model.
-    :param  model:              A string denoting the path to the metabolic model (.xml or .sbml file).
+    :param  model:              A string denoting the path to the metabolic model (`.xml` or `.sbml` file types supported only.
     :return PositionModel:      A Pandas dataframe containing the positions for each metabolite in the metabolic model.
     """
 
@@ -251,23 +318,24 @@ def mapMetabolitePositionsInModel(mergedModelDataMap, model):
 
     mergedModelDataMap['BIGG'] = mergedModelDataMap['BIGG'].str.split('_', n=1).str[-1]
     mergedModelDataMap['BIGG'] = mergedModelDataMap['BIGG'].str.rsplit('_', n=1).str[0]
-    mergedModelDataMap = mergedModelDataMap.drop(['CHEBI', 'KEGG', 'Metabolite'], axis=1)
-    mergedModelDataMap = mergedModelDataMap.drop_duplicates(keep='first')
+    #mergedModelDataMap = mergedModelDataMap.drop(['CHEBI', 'KEGG'], axis=1)
+    mergedModelDataMap = mergedModelDataMap.drop_duplicates('Metabolite', keep='first')
 
     PositionModel = pd.merge(biggRxn, mergedModelDataMap,
                               left_index=True, right_on='BIGG')
     PositionModel = PositionModel.drop(['BIGG'], axis=1)
-    PositionModel = PositionModel.set_index(['query'])
+    PositionModel = PositionModel.set_index(['Query'])
+    PositionModel.to_csv(r'~/Data/Mappings/ME1/RECON1_position_map.csv', index=True)
 
     print('Mapped metabolite positions in metabolic model to metabolite name')
-    print(PositionModel)
     return PositionModel
+
 
 def constructFinalDataset(PositionModel, filename, sheet='Sheet1'):
     """
     constructFinalDataset merges the array of metabolite positions and the file name together.
     It automatically outputs an Excel file, ready for piping into DFA.
-    
+
     :param  PositionModel: A Pandas dataframe containing the metabolite positions in the metabolic model.
     :param  filename:      A string denoting the path of the metabolomics data.
     :return df:            A Pandas dataframe containing the metabolomics data that intersects with the metabolic
@@ -279,19 +347,65 @@ def constructFinalDataset(PositionModel, filename, sheet='Sheet1'):
         fileData = pd.read_excel(filename, sheet_name=sheet)
     else:
         fileData = pd.read_csv(filename)
-    df = pd.merge(PositionModel, fileData,
-                  left_index=True, right_on=fileData.iloc[:, 0],
+
+    # Load from Google Drive
+    # wb = gc.open_by_url(filename)
+    # wks = wb.worksheet(sheet)
+    # data = wks.get_all_values()
+    # fileData = pd.DataFrame(data)
+    # header = fileData.iloc[0]
+    # fileData = fileData[1:]
+    # fileData.columns = header
+
+    # Clean up regexes
+    all_compounds = fileData
+    patterns = ["[", "]", "'", '"', '.']
+    for p in patterns:
+        all_compounds['Compound Method'] = all_compounds['Compound Method'].str.replace(p, '')
+        all_compounds['Compound Method'] = all_compounds['Compound Method'].str.strip()
+        PositionModel.index = PositionModel.index.str.replace(p, '')
+        PositionModel.index = PositionModel.index.str.strip()
+
+    all_compounds['Compound Method'] = all_compounds['Compound Method'].str.lower()
+    PositionModel.index = PositionModel.index.str.lower()
+    print(PositionModel.index)
+    print(all_compounds['Compound Method'].values)
+
+    df = pd.merge(PositionModel, all_compounds,
+                  left_index=True, right_on='Compound Method',
                   how='inner')
-    #df = df.drop(['Compound Method'], axis=1)
-    print(df)
-    df = df['key_0'].rename(columns={'key_0':'Metabolites'})
-    name = filename.split('.')[0] + "_processed"
-    df.to_excel(name+'.xlsx', sheet_name=sheet, index=False)
-    print("Finished merging metabolomics data to model map. Results are saved as an Excel file!")
+    #print(df)
+    print("Finished merging metabolomics data to model map!")
+    return df
 
 if __name__=='__main__':
-   data = queryMetaboAnalyst(filename=sys.argv[2], sheet=sys.argv[3])
-   modelMap = mapMetabolicModel(model=sys.argv[1])
-   mergedModelDataMap = matchModelAndData(data, modelMap)
-   PositionModel = mapMetabolitePositionsInModel(mergedModelDataMap, model=sys.argv[1])
-   df = constructFinalDataset(PositionModel, filename=sys.argv[2], sheet=sys.argv[3])
+    name = r'/home/scampit/Data/Expression/Metabolomics/ME1/raw/ME1_Metabolomics.xlsx'
+    model = r'/home/scampit/Data/CBM/MetabolicModels/RECON1/RECON1.xml'
+
+    # Create a spreadsheet that will save all of the data
+    from openpyxl import load_workbook
+    writer = pd.ExcelWriter(r'/home/scampit/Data/Expression/Metabolomics/ME1/processed/ME1_mapped_metabolomics.xlsx',
+                            engine='openpyxl')
+
+    xl = pd.ExcelFile(name)
+    sheetNames = xl.sheet_names
+    sheetNames = sheetNames[1:]
+
+    # Parts of the parser that will take a long time, especially if `synmatch` is True
+    #modelMap = mapMetabolicModel(model)
+    modelMap = pd.read_csv(r'~/Data/Mappings/ME1/RECON1_ID_Map.csv', dtype=str)
+    #data = queryMetaboAnalyst(filename=name, sheet=sheetNames[0], synmatch=True)
+    data = []
+    #data = pd.read_csv(r'/home/scampit/Data/Mappings/ME1/metaboanalyst_me1_query.csv')
+    #mergedModelDataMap = matchModelAndData(data, modelMap, synmatch=True)
+    mergedModelDataMap = pd.read_csv(r'~/Data/Mappings/ME1/metaboanalyst_recon1_map.csv')
+    PositionModel = mapMetabolitePositionsInModel(mergedModelDataMap, model)
+    #PositionModel = pd.read_csv(r'~/Data/Mappings/ME1/RECON1_position_map.csv', index_col='Query')
+    #df = constructFinalDataset(PositionModel, name, sheetNames[0])
+    #print(df)
+
+    # Save multiple sheets
+    #for sht in sheetNames:
+    #    df = constructFinalDataset(PositionModel, name, sht)
+    #    df.to_excel(writer, sheet_name=sht, index=False)
+    #writer.save()
