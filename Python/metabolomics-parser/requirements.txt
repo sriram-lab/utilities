@@ -6,7 +6,7 @@ et-xmlfile==1.0.1
 future==0.18.2
 idna==2.8
 jdcal==1.4.1
-lxml==4.4.2
+lxml==4.6.2
 mpmath==1.1.0
 numpy==1.18.1
 openpyxl==3.0.3
