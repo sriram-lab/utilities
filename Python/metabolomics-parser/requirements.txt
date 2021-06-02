@@ -24,6 +24,6 @@ ruamel.yaml.clib==0.2.0
 six==1.14.0
 swiglpk==4.65.1
 sympy==1.5.1
-urllib3==1.25.8
+urllib3==1.26.5
 xlrd==1.2.0
 zmq==0.0.0
